@@ -1,11 +1,11 @@
--- ─── Constants ───────────────────────────────────────────────
+---Constants---
 local W, H        = 600, 600
 local CELL        = 140
 local GRID_X      = (W - CELL * 3) / 2      -- left edge of grid
 local GRID_Y      = 160                      -- top  edge of grid
 local MAX_ROUNDS  = 10
 
--- ─── Colours ─────────────────────────────────────────────────
+---Colours---
 local C = {
     bg        = {0.36, 0.65, 0.84},
     grid      = {1,    1,    1,    0.9},
@@ -18,13 +18,13 @@ local C = {
     panel     = {1,    1,    1,    0.18},
     btnBg     = {0.18, 0.42, 0.62},
     btnHover  = {0.25, 0.55, 0.78},
+    btnSel    = {0.10, 0.68, 0.38},   -- selected difficulty button (green)
     winLine   = {1,    0.88, 0.1, 0.95},
 }
 
--- ─── Fonts ───────────────────────────────────────────────────
 local fnt = {}
 
--- ─── State ───────────────────────────────────────────────────
+---State---
 local state          -- "menu" | "playing" | "roundEnd" | "gameEnd"
 local board          -- 3×3 table; nil=empty, "X"=player, "O"=AI
 local playerScore
@@ -32,11 +32,12 @@ local aiScore
 local round
 local roundWinner    -- "X" | "O" | "draw"
 local winCells       -- list of {r,c} for the winning line
-local aiThinking     -- small delay so AI move feels natural
+local aiThinking     -- a small delay so AI move feels natural
 local aiTimer
 local hoverCell      -- {r,c} or nil
+local difficulty     -- "easy" | "hard"
 
--- ─── Helpers ─────────────────────────────────────────────────
+---Helpers---
 local function newBoard()
     local b = {}
     for r = 1, 3 do b[r] = {nil, nil, nil} end
@@ -69,7 +70,7 @@ local function checkWinner(b)
     return "draw"
 end
 
--- ─── Minimax ─────────────────────────────────────────────────
+---Minimax (Hard)---
 local function minimax(b, isMax, alpha, beta)
     local winner = checkWinner(b)
     if winner == "O"    then return  10 end
@@ -118,13 +119,80 @@ local function bestAIMove(b)
     return br, bc
 end
 
--- ─── Grid helpers ────────────────────────────────────────────
+---Minimax (Easy)---
+--uses the hard mode algorithm as a base to strip this version down by limiting 
+--its thinking mode and adding random elements which gives disadavantages, but that
+--doesnt mean it wont try to win (AI used here)
+local function minimaxEasy(b, isMax, alpha, beta, depth)
+    local winner = checkWinner(b)
+    if winner == "O"    then return  10 end
+    if winner == "X"    then return -10 end
+    if winner == "draw" then return   0 end
+    if depth >= 2 then return 0 end
+
+    if isMax then
+        local best = -math.huge
+        for r = 1,3 do for c = 1,3 do
+            if not b[r][c] then
+                b[r][c] = "O"
+                local score = minimaxEasy(b, false, alpha, beta, depth + 1)
+                b[r][c] = nil
+                best  = math.max(best,  score)
+                alpha = math.max(alpha, best)
+                if beta <= alpha then return best end
+            end
+        end end
+        return best
+    else
+        local best = math.huge
+        for r = 1,3 do for c = 1,3 do
+            if not b[r][c] then
+                b[r][c] = "X"
+                local score = minimaxEasy(b, true, alpha, beta, depth + 1)
+                b[r][c] = nil
+                best = math.min(best,  score)
+                beta = math.min(beta,  best)
+                if beta <= alpha then return best end
+            end
+        end end
+        return best
+    end
+end
+
+-- Among all moves that share the best minimax score, pick one at random.
+-- This prevents the easy AI from always playing the same deterministic
+-- sequence, making it feel more natural and less predictable.
+local function bestAIMoveEasy(b)
+    local bestScore = -math.huge
+    local candidates = {}
+
+    for r = 1,3 do for c = 1,3 do
+        if not b[r][c] then
+            b[r][c] = "O"
+            local s = minimaxEasy(b, false, -math.huge, math.huge, 0)
+            b[r][c] = nil
+            if s > bestScore then
+                bestScore  = s
+                candidates = {{r, c}}
+            elseif s == bestScore then
+                candidates[#candidates + 1] = {r, c}
+            end
+        end
+    end end
+
+    if #candidates == 0 then return nil, nil end
+    local pick = candidates[math.random(#candidates)]
+    return pick[1], pick[2]
+end
+
+---Grid helpers---
 local function cellRect(r, c)
     local x = GRID_X + (c-1)*CELL
     local y = GRID_Y + (r-1)*CELL
     return x, y, CELL, CELL
 end
 
+---button helpers---
 local function cellAt(mx, my)
     for r = 1,3 do for c = 1,3 do
         local x,y,w,h2 = cellRect(r,c)
@@ -134,9 +202,16 @@ local function cellAt(mx, my)
     end end
 end
 
--- ─── Button helper ───────────────────────────────────────────
-local function drawButton(lbl, x, y, w, h2, hover)
-    love.graphics.setColor(hover and C.btnHover or C.btnBg)
+local function drawButton(lbl, x, y, w, h2, hover, selected)
+    local col
+    if selected then
+        col = C.btnSel
+    elseif hover then
+        col = C.btnHover
+    else
+        col = C.btnBg
+    end
+    love.graphics.setColor(col)
     love.graphics.rectangle("fill", x, y, w, h2, 8, 8)
     love.graphics.setColor(C.yellow)
     love.graphics.setFont(fnt.med)
@@ -147,7 +222,7 @@ local function btnHit(mx, my, x, y, w, h2)
     return mx>=x and mx<=x+w and my>=y and my<=y+h2
 end
 
--- ─── Initialise ──────────────────────────────────────────────
+---Initialise---
 function love.load()
     love.window.setTitle("Tic Tac Toe")
     love.window.setMode(W, H, {resizable=false})
@@ -158,12 +233,15 @@ function love.load()
     fnt.title = love.graphics.newFont(52)
     fnt.sym   = love.graphics.newFont(80)   -- X / O symbols
 
-    state = "menu"
+    math.randomseed(os.time())  -- seed RNG for easy mode tie-breaking
+
+    difficulty = "hard"         -- default difficulty
+    state      = "menu"
     playerScore, aiScore, round = 0, 0, 0
 end
 
 local function startRound()
-    board      = newBoard()
+    board       = newBoard()
     roundWinner = nil
     winCells    = nil
     aiThinking  = false
@@ -171,7 +249,7 @@ local function startRound()
     state       = "playing"
 end
 
--- ─── Update ──────────────────────────────────────────────────
+---Update---
 function love.update(dt)
     local mx, my = love.mouse.getPosition()
     hoverCell = nil
@@ -186,7 +264,15 @@ function love.update(dt)
             aiTimer = aiTimer + dt
             if aiTimer >= 0.45 then
                 aiThinking = false
-                local ar, ac = bestAIMove(board)
+
+                -- choose a move based on current difficulty
+                local ar, ac
+                if difficulty == "easy" then
+                    ar, ac = bestAIMoveEasy(board)
+                else
+                    ar, ac = bestAIMove(board)
+                end
+
                 if ar then
                     board[ar][ac] = "O"
                     local w, wc = checkWinner(board)
@@ -204,21 +290,29 @@ function love.update(dt)
     end
 end
 
--- ─── Input ───────────────────────────────────────────────────
+---Input---
 function love.mousepressed(mx, my, btn)
     if btn ~= 1 then return end
 
-    -- ── Menu ────────────────────────────────────────────────
+    ---Menu---
     if state == "menu" then
-        -- Start Game button  (centred, y≈300)
-        if btnHit(mx,my, W/2-100, 290, 200, 48) then
+        -- Difficulty buttons
+        if btnHit(mx,my, W/2-120, 285, 110, 44) then
+            difficulty = "easy"
+        end
+        if btnHit(mx,my, W/2+10,  285, 110, 44) then
+            difficulty = "hard"
+        end
+
+        -- Start Game button
+        if btnHit(mx,my, W/2-100, 355, 200, 48) then
             playerScore, aiScore, round = 0, 0, 0
             round = 1
             startRound()
         end
     end
 
-    -- ── Playing ─────────────────────────────────────────────
+    ---Playing---
     if state == "playing" and not aiThinking then
         local r,c = cellAt(mx,my)
         if r and not board[r][c] then
@@ -238,7 +332,7 @@ function love.mousepressed(mx, my, btn)
         end
     end
 
-    -- ── Round End ───────────────────────────────────────────
+    ---Round End---
     if state == "roundEnd" then
         if btnHit(mx,my, W/2-110, H-110, 220, 48) then
             if round >= MAX_ROUNDS then
@@ -250,7 +344,7 @@ function love.mousepressed(mx, my, btn)
         end
     end
 
-    -- ── Game End ────────────────────────────────────────────
+--- Game End ---
     if state == "gameEnd" then
         if btnHit(mx,my, W/2-110, H-110, 220, 48) then
             state = "menu"
@@ -258,7 +352,7 @@ function love.mousepressed(mx, my, btn)
     end
 end
 
--- ─── Draw ────────────────────────────────────────────────────
+ ---Draw---
 local function drawBackground()
     love.graphics.setColor(C.bg)
     love.graphics.rectangle("fill", 0, 0, W, H)
@@ -321,6 +415,15 @@ local function drawScoreBar()
     love.graphics.setColor(C.white)
     love.graphics.printf("Round "..round.." / "..MAX_ROUNDS, 0, 14, W, "center")
 
+    ---difficulty badge---
+    local badge = difficulty == "easy" and "EASY" or "HARD"
+    local badgeCol = difficulty == "easy" and C.btnSel or {0.80, 0.22, 0.22}
+    love.graphics.setColor(badgeCol)
+    love.graphics.rectangle("fill", W - 80, 10, 68, 28, 6, 6)
+    love.graphics.setColor(C.white)
+    love.graphics.setFont(fnt.small)
+    love.graphics.printf(badge, W - 80, 18, 68, "center")
+
     -- side scores
     love.graphics.setColor(C.X)
     love.graphics.setFont(fnt.large)
@@ -329,33 +432,49 @@ local function drawScoreBar()
     love.graphics.printf("AI\n"..aiScore, W/2+10, 55, W/2-10, "left")
 end
 
--- ═══════════════════════════════════════════════════════════
 function love.draw()
     drawBackground()
 
-    -- ── Menu ────────────────────────────────────────────────
+    ---Menu---
     if state == "menu" then
         love.graphics.setFont(fnt.title)
         love.graphics.setColor(C.white)
-        love.graphics.printf("Tic Tac Toe", 0, 100, W, "center")
+        love.graphics.printf("Tic Tac Toe", 0, 80, W, "center")
 
         love.graphics.setFont(fnt.med)
         love.graphics.setColor(C.yellow)
-        love.graphics.printf("You are  X  |  AI is  O", 0, 185, W, "center")
-        love.graphics.printf("Player always goes first", 0, 215, W, "center")
-        love.graphics.printf("Best of 10 rounds", 0, 248, W, "center")
+        love.graphics.printf("You are  X  |  AI is  O", 0, 165, W, "center")
+        love.graphics.printf("Welcome to Tic tac toe", 0, 198, W, "center")
+
+        -- Difficulty label
+        love.graphics.setFont(fnt.med)
+        love.graphics.setColor(C.white)
+        love.graphics.printf("Select Difficulty", 0, 248, W, "center")
 
         local mx,my = love.mouse.getPosition()
-        drawButton("Start Game", W/2-100, 290, 200, 48,
-            btnHit(mx,my, W/2-100, 290, 200, 48))
+
+        -- Easy button  (left of centre)
+        drawButton("Easy",
+            W/2-120, 285, 110, 44,
+            btnHit(mx,my, W/2-120, 285, 110, 44),
+            difficulty == "easy")
+
+        -- Hard button  (right of centre)
+        drawButton("Hard",
+            W/2+10, 285, 110, 44,
+            btnHit(mx,my, W/2+10, 285, 110, 44),
+            difficulty == "hard")
+
+        -- Start button
+        drawButton("Start Game", W/2-100, 355, 200, 48,
+            btnHit(mx,my, W/2-100, 355, 200, 48))
 
         love.graphics.setFont(fnt.small)
         love.graphics.setColor(C.white)
-        love.graphics.printf("Powered by Minimax AI", 0, H-40, W, "center")
         return
     end
 
-    -- ── Playing ─────────────────────────────────────────────
+    ---Playing---
     if state == "playing" then
         drawScoreBar()
         drawHover()
@@ -372,7 +491,7 @@ function love.draw()
         return
     end
 
-    -- ── Round End ───────────────────────────────────────────
+    ---Round End---
     if state == "roundEnd" then
         drawScoreBar()
         drawGrid()
@@ -410,7 +529,7 @@ function love.draw()
         return
     end
 
-    -- ── Game End ────────────────────────────────────────────
+    ---Game End---
     if state == "gameEnd" then
         love.graphics.setFont(fnt.title)
         love.graphics.setColor(C.white)
@@ -439,7 +558,7 @@ function love.draw()
         love.graphics.setFont(fnt.large)
         local verdict, vc
         if playerScore > aiScore then
-            verdict, vc = "🏆 You Win!", C.X
+            verdict, vc = "You Win!", C.X
         elseif aiScore > playerScore then
             verdict, vc = "AI Wins!", C.O
         else
