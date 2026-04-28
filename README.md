@@ -8,7 +8,7 @@ How to play this game;
 
 # How to make this game work on mobile devices (android works unsure about IOS)
 This guide was done on a Samsung device. Your file manager app might have a different name on other phones.
-before we get started make sure you have your phone connected to your PC with a usb b cable and go into your phones internal storage
+Before we get started make sure you have your phone connected to your PC with a usb b cable and go into your phones internal storage
 1. Install the "app-normal-debug.apk"
 2. create a new folder inside your phone's internal storage called "debugged apps"
 3. COPY AND PASTE the apk file we installed into this folder
